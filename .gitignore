@@ -1,0 +1,5 @@
+cookies.txt
+lectures/
+urls_*.txt
+.env
+__pycache__/
