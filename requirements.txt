@@ -1,0 +1,4 @@
+google-genai>=2.26.0
+yt-dlp
+faster-whisper>=1.2.1
+python-dotenv
