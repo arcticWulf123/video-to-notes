@@ -131,9 +131,15 @@ re-run after a crash or a network drop. Press `Ctrl+C` to stop partway.
 ### See which models are available
 
 ```powershell
-python list_models.py          # every flash model your key can reach
-python list_models.py pro      # filter by any substring
+python list_models.py               # every flash model your key can reach
+python list_models.py pro           # filter by any substring
+python list_models.py flash --test  # actually call each one and report which work
 ```
+
+Add `--test` when a model starts failing. `models.list()` reports what **exists in the
+catalogue**, which is not the same as what your key can **use** — retired models keep
+appearing in the list. `--test` sends one tiny request per model and prints a ready-to-paste
+`FALLBACK_MODELS` block, excluding anything that returns `404`.
 
 ---
 
@@ -192,7 +198,7 @@ https://www.youtube.com/watch?v=bbbbbbbbbbb
 |---|---|
 | `notes.py` | Cleans a transcript and asks Gemini to turn it into notes. |
 | `batch.py` | Loops over URLs: downloads, transcribes, calls `notes.py`. |
-| `list_models.py` | Lists models your API key can reach. |
+| `list_models.py` | Lists models your API key can reach. `--test` also calls each one. |
 | `requirements.txt` | The four Python packages this needs. |
 | `.env` | Your API key. Gitignored. |
 | `.env.example` | Template for `.env`. Safe to commit. |
@@ -208,19 +214,20 @@ https://www.youtube.com/watch?v=bbbbbbbbbbb
 | `34` | `clean_vtt()` — strips timestamps, cue numbers, and `<00:00:01>` tags from a subtitle file |
 | `56` | Runs `clean_vtt()` only if the input is `.vtt`; plain text passes through |
 | `58` | `genai.Client()` reads `GEMINI_API_KEY` from the environment automatically |
-| `62` | `FALLBACK_MODELS` — tried top to bottom |
-| `72` | `generate()` — the retry and fallback loop |
-| `96` | Writes the result to the same filename with a `.md` extension |
+| `63` | `FALLBACK_MODELS` — tried top to bottom |
+| `78` | `generate()` — the retry and fallback loop |
+| `102` | Writes the result to the same filename with a `.md` extension |
 
 ### The retry logic
 
-This is the part worth understanding. Gemini returns two failure codes that look
+This is the part worth understanding. Gemini returns failure codes that look
 similar but need opposite responses:
 
 | Code | Meaning | Response |
 |---|---|---|
 | **429** | You're sending too fast | Same model is fine. Wait `15s × attempt`, retry up to 5 times. |
 | **500 / 503** | That model is overloaded | Waiting won't help. **Switch to the next model immediately.** |
+| **404** | That model has been retired | Same as above — **switch to the next model.** Never add a `404` model back to the list. |
 | other | Real bug | Raise — don't silently retry something that won't fix itself. |
 
 That distinction matters. An earlier version retried 503s five times, burning ~4
@@ -231,6 +238,11 @@ seconds. If you see this in the output, it's working as intended:
 ```
 gemini-3.8-flash: error 503, trying the next model...
 ```
+
+`404` was originally treated as a "real bug" and raised, which meant one retired
+model in the list could crash a whole batch once the working models were briefly
+overloaded. Google retires models on a rolling basis, so it is now handled like a
+`503`: skip it and try the next one.
 
 ### `cookies.txt`
 
@@ -271,8 +283,10 @@ Whisper transcription have no `.en`, because there were no captions to begin wit
 | `ModuleNotFoundError: No module named 'yt_dlp'` | Dependencies not installed, or venv not active | `pip install -r requirements.txt` |
 | `No urls_webdev.txt here.` | Wrong directory | `cd` to the project root and retry |
 | `Unknown subject 'foo'` | Typo in the subject name | Use `webdev` or `infoman` |
-| `All models failed (...)` | Every model overloaded | Wait a few minutes, rerun. `python list_models.py` to see what's up |
+| `All models failed (...)` | Every model overloaded | Wait a few minutes, rerun. `python list_models.py flash --test` to see what's up |
 | `trying the next model...` | Normal. One model was busy | Nothing to do |
+| `ModuleNotFoundError: No module named 'dotenv'` | You ran system `python`, not the venv | Use `.\.venv\Scripts\python.exe batch.py ...` |
+| `404 NOT_FOUND` on a model | That model was retired by Google | Should no longer be fatal; run `list_models.py flash --test` and refresh `FALLBACK_MODELS` |
 | Auth / 400 error from Gemini | Missing or wrong `GEMINI_API_KEY` | Check `.env`, then `python list_models.py` |
 | yt-dlp login prompts or "Sign in" pages | `cookies.txt` expired | Re-export from a logged-in browser |
 | `RuntimeError` but no traceback above it | A lecture failed | Read the `FAILED (...)` line above it — it names the cause |

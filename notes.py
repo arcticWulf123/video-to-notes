@@ -58,14 +58,20 @@ transcript = clean_vtt(raw) if path.suffix == ".vtt" else raw
 client = genai.Client()
 
 # Models to try in order. Set GEMINI_MODEL to pin one model and skip the fallbacks.
-# Run list_models.py to see what your key can reach.
+# Verified with: .\.venv\Scripts\python.exe list_models.py flash --test
+# Do NOT add gemini-2.5-flash or gemini-2.5-flash-lite: both are retired and return 404.
 FALLBACK_MODELS = [
+    "gemini-flash-latest",
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
+    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
     "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
-    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-omni-flash-preview",
 ]
 MODELS = [os.environ["GEMINI_MODEL"]] if os.environ.get("GEMINI_MODEL") else FALLBACK_MODELS
 
@@ -81,8 +87,8 @@ def generate(prompt):
                     print(f"{model}: rate limited, retrying in {wait}s...")
                     time.sleep(wait)
                     continue
-                if e.code in (500, 503):
-                    # Overloaded: waiting will not help, switch model instead.
+                if e.code in (404, 500, 503):
+                    # 404 = model retired, 500/503 = overloaded. Either way, use the next model.
                     print(f"{model}: error {e.code}, trying the next model...")
                     break
                 raise
