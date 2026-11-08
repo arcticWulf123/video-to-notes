@@ -35,9 +35,9 @@ for i, url in enumerate(urls, 1):
         # Try captions first (fast)
         subprocess.run([
             *YTDLP, "--write-auto-subs", "--sub-langs", "en",
-            "--skip-download", *COOKIE_ARGS,
-            "-o", str(OUT / name), url,
-        ])
+            "--skip-download", "--socket-timeout", "30", "--retries", "3",
+            *COOKIE_ARGS, "-o", str(OUT / name), url,
+        ], timeout=900)
         vtt = OUT / f"{name}.en.vtt"
 
         if vtt.exists():
@@ -46,9 +46,10 @@ for i, url in enumerate(urls, 1):
             # No captions: download audio and transcribe with Whisper
             subprocess.run([
                 *YTDLP, "-x", "--audio-format", "mp3",
+                "--socket-timeout", "30", "--retries", "3",
                 *COOKIE_ARGS,
                 "-o", str(OUT / f"{name}.%(ext)s"), url,
-            ])
+            ], timeout=900)
             if whisper is None:
                 from faster_whisper import WhisperModel
                 whisper = WhisperModel("small", compute_type="int8")
@@ -56,7 +57,7 @@ for i, url in enumerate(urls, 1):
             source = OUT / f"{name}.txt"
             source.write_text(" ".join(s.text for s in segments), encoding="utf-8")
 
-        subprocess.run([sys.executable, "notes.py", str(source), subject], check=True)
+        subprocess.run([sys.executable, "notes.py", str(source), subject], check=True, timeout=1800)
     except Exception as e:
         print(f"{name}: FAILED ({type(e).__name__}: {e})")
         failed.append(name)

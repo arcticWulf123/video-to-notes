@@ -1,7 +1,8 @@
 import os, sys, re, time, pathlib
+import httpx
 from dotenv import load_dotenv
 from google import genai
-from google.genai import errors
+from google.genai import errors, types
 
 load_dotenv()
 
@@ -55,7 +56,9 @@ if not path.is_file():
 raw = path.read_text(encoding="utf-8")
 transcript = clean_vtt(raw) if path.suffix == ".vtt" else raw
 
-client = genai.Client()
+# timeout is in MILLISECONDS. Without it the SDK passes timeout=None to httpx,
+# which waits forever on a TCP connection that has silently died mid-request.
+client = genai.Client(http_options=types.HttpOptions(timeout=180_000))
 
 # Models to try in order. Set GEMINI_MODEL to pin one model and skip the fallbacks.
 # Verified with: .\.venv\Scripts\python.exe list_models.py flash --test
@@ -92,6 +95,11 @@ def generate(prompt):
                     print(f"{model}: error {e.code}, trying the next model...")
                     break
                 raise
+            except (httpx.TimeoutException, httpx.ConnectError) as e:
+                # The connection died mid-request and moved no bytes. Retrying the same
+                # host tends to stall again, so switch model instead.
+                print(f"{model}: network stalled ({type(e).__name__}), trying the next model...")
+                break
             if text:
                 return text
             print(f"{model}: empty response, trying the next model...")

@@ -213,10 +213,10 @@ https://www.youtube.com/watch?v=bbbbbbbbbbb
 | `8` | `PROMPTS` — one instruction template per subject |
 | `34` | `clean_vtt()` — strips timestamps, cue numbers, and `<00:00:01>` tags from a subtitle file |
 | `56` | Runs `clean_vtt()` only if the input is `.vtt`; plain text passes through |
-| `58` | `genai.Client()` reads `GEMINI_API_KEY` from the environment automatically |
-| `63` | `FALLBACK_MODELS` — tried top to bottom |
-| `78` | `generate()` — the retry and fallback loop |
-| `102` | Writes the result to the same filename with a `.md` extension |
+| `61` | `genai.Client()` reads `GEMINI_API_KEY` from the environment, and sets a request timeout |
+| `66` | `FALLBACK_MODELS` — tried top to bottom |
+| `81` | `generate()` — the retry and fallback loop |
+| `110` | Writes the result to the same filename with a `.md` extension |
 
 ### The retry logic
 
@@ -228,6 +228,7 @@ similar but need opposite responses:
 | **429** | You're sending too fast | Same model is fine. Wait `15s × attempt`, retry up to 5 times. |
 | **500 / 503** | That model is overloaded | Waiting won't help. **Switch to the next model immediately.** |
 | **404** | That model has been retired | Same as above — **switch to the next model.** Never add a `404` model back to the list. |
+| **network stall** | The TCP connection died mid-request | Same as above — **switch to the next model.** |
 | other | Real bug | Raise — don't silently retry something that won't fix itself. |
 
 That distinction matters. An earlier version retried 503s five times, burning ~4
@@ -243,6 +244,33 @@ gemini-3.8-flash: error 503, trying the next model...
 model in the list could crash a whole batch once the working models were briefly
 overloaded. Google retires models on a rolling basis, so it is now handled like a
 `503`: skip it and try the next one.
+
+### The timeout (why it used to hang forever)
+
+The `google-genai` SDK defaults to **no timeout at all**. Internally it does this:
+
+```python
+if 'timeout' not in args:
+    args['timeout'] = None      # httpx: wait indefinitely
+```
+
+A TCP connection can look "open" to Windows while the far end has silently
+vanished — a router reboot, a VPN reconnect, or a Wi-Fi wobble is enough. Normally
+a *read timeout* is what rescues you from that. With `None`, `recv()` blocks
+forever, no exception is ever raised, and because the batch is sequential, every
+later lecture never starts. The process just sits there at 0% CPU.
+
+So the client is created with an explicit timeout, in **milliseconds**:
+
+```python
+client = genai.Client(http_options=types.HttpOptions(timeout=180_000))  # 3 minutes
+```
+
+Three minutes is deliberate: a non-streaming request sends nothing until the whole
+answer is ready, so this has to exceed the slowest *normal* generation. When it
+does fire, you get `ReadTimeout`, which is caught and treated as "network stall"
+above. The batch-level backstop is `timeout=1800` on the `notes.py` subprocess, so
+even an unforeseen hang fails the lecture instead of freezing the run.
 
 ### `cookies.txt`
 
@@ -287,6 +315,8 @@ Whisper transcription have no `.en`, because there were no captions to begin wit
 | `trying the next model...` | Normal. One model was busy | Nothing to do |
 | `ModuleNotFoundError: No module named 'dotenv'` | You ran system `python`, not the venv | Use `.\.venv\Scripts\python.exe batch.py ...` |
 | `404 NOT_FOUND` on a model | That model was retired by Google | Should no longer be fatal; run `list_models.py flash --test` and refresh `FALLBACK_MODELS` |
+| Batch sits at 0% CPU with no output | Dead socket; no timeout was set | Fixed — client timeout is 3 min, subprocess ceiling is 30 min. Check with `Get-Process python*` |
+| `network stalled (ReadTimeout)` | Connection died mid-request | Normal. It switched to the next model. Re-run the lecture if all models stall |
 | Auth / 400 error from Gemini | Missing or wrong `GEMINI_API_KEY` | Check `.env`, then `python list_models.py` |
 | yt-dlp login prompts or "Sign in" pages | `cookies.txt` expired | Re-export from a logged-in browser |
 | `RuntimeError` but no traceback above it | A lecture failed | Read the `FAILED (...)` line above it — it names the cause |
