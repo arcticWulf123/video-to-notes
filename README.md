@@ -226,7 +226,8 @@ similar but need opposite responses:
 | Code | Meaning | Response |
 |---|---|---|
 | **429** | You're sending too fast | Same model is fine. Wait `15s × attempt`, retry up to 5 times. |
-| **500 / 503** | That model is overloaded | Waiting won't help. **Switch to the next model immediately.** |
+| **500 / 502 / 503 / 504** | That model is overloaded, or its gateway gave up | Waiting won't help. **Switch to the next model immediately.** |
+| **408** | The request itself timed out | Same — **switch to the next model.** |
 | **404** | That model has been retired | Same as above — **switch to the next model.** Never add a `404` model back to the list. |
 | **network stall** | The TCP connection died mid-request | Same as above — **switch to the next model.** |
 | other | Real bug | Raise — don't silently retry something that won't fix itself. |
@@ -263,14 +264,19 @@ later lecture never starts. The process just sits there at 0% CPU.
 So the client is created with an explicit timeout, in **milliseconds**:
 
 ```python
-client = genai.Client(http_options=types.HttpOptions(timeout=180_000))  # 3 minutes
+client = genai.Client(http_options=types.HttpOptions(timeout=300_000))  # 5 minutes
 ```
 
-Three minutes is deliberate: a non-streaming request sends nothing until the whole
-answer is ready, so this has to exceed the slowest *normal* generation. When it
-does fire, you get `ReadTimeout`, which is caught and treated as "network stall"
-above. The batch-level backstop is `timeout=1800` on the `notes.py` subprocess, so
-even an unforeseen hang fails the lecture instead of freezing the run.
+Five minutes is deliberate for two reasons. A non-streaming request sends nothing
+until the whole answer is ready, so the limit has to exceed the slowest *normal*
+generation. And `timeout` also makes the SDK send an `X-Server-Timeout` header, so
+Google abandons the request at the same limit and returns `504 DEADLINE_EXCEEDED`
+— too tight a value turns big transcripts into permanent failures.
+
+When it fires, you get `ReadTimeout` (caught as "network stall") or `504` (caught as
+"overloaded"); both switch models. The batch-level backstop is `timeout=1800` on
+the `notes.py` subprocess, so even an unforeseen hang fails the lecture instead of
+freezing the run.
 
 ### `cookies.txt`
 
@@ -315,7 +321,8 @@ Whisper transcription have no `.en`, because there were no captions to begin wit
 | `trying the next model...` | Normal. One model was busy | Nothing to do |
 | `ModuleNotFoundError: No module named 'dotenv'` | You ran system `python`, not the venv | Use `.\.venv\Scripts\python.exe batch.py ...` |
 | `404 NOT_FOUND` on a model | That model was retired by Google | Should no longer be fatal; run `list_models.py flash --test` and refresh `FALLBACK_MODELS` |
-| Batch sits at 0% CPU with no output | Dead socket; no timeout was set | Fixed — client timeout is 3 min, subprocess ceiling is 30 min. Check with `Get-Process python*` |
+| Batch sits at 0% CPU with no output | Dead socket; no timeout was set | Fixed — client timeout is 5 min, subprocess ceiling is 30 min. Check with `Get-Process python*` |
+| `504 DEADLINE_EXCEEDED` | Google gave up at the request timeout | Normal now; it switches models. For a big transcript, raise `300_000` in `notes.py` |
 | `network stalled (ReadTimeout)` | Connection died mid-request | Normal. It switched to the next model. Re-run the lecture if all models stall |
 | Auth / 400 error from Gemini | Missing or wrong `GEMINI_API_KEY` | Check `.env`, then `python list_models.py` |
 | yt-dlp login prompts or "Sign in" pages | `cookies.txt` expired | Re-export from a logged-in browser |

@@ -58,7 +58,9 @@ transcript = clean_vtt(raw) if path.suffix == ".vtt" else raw
 
 # timeout is in MILLISECONDS. Without it the SDK passes timeout=None to httpx,
 # which waits forever on a TCP connection that has silently died mid-request.
-client = genai.Client(http_options=types.HttpOptions(timeout=180_000))
+# Note: this also sends X-Server-Timeout, so Google abandons the request at this
+# limit. Long transcripts need headroom, hence 5 minutes rather than 1-2.
+client = genai.Client(http_options=types.HttpOptions(timeout=300_000))
 
 # Models to try in order. Set GEMINI_MODEL to pin one model and skip the fallbacks.
 # Verified with: .\.venv\Scripts\python.exe list_models.py flash --test
@@ -90,8 +92,9 @@ def generate(prompt):
                     print(f"{model}: rate limited, retrying in {wait}s...")
                     time.sleep(wait)
                     continue
-                if e.code in (404, 500, 503):
-                    # 404 = model retired, 500/503 = overloaded. Either way, use the next model.
+                if e.code in (404, 408, 500, 502, 503, 504):
+                    # 404 = model retired. 408/500/502/503/504 = overloaded or out of time.
+                    # Either way, use the next model.
                     print(f"{model}: error {e.code}, trying the next model...")
                     break
                 raise
